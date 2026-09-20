@@ -102,41 +102,70 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
     // MARK: - Screen Brightness (moved from client app into helper)
 
     @objc func isScreenBrightnessAvailable(with reply: @escaping (Bool) -> Void) {
-        var b: Float = 0
-        reply(displayServicesGetBrightness(displayID: CGMainDisplayID(), out: &b) || ioServiceFor(displayID: CGMainDisplayID()) != nil)
+        reply(brightnessCandidates().contains { id in
+            var b: Float = 0
+            if displayServicesGetBrightness(displayID: id, out: &b) { return true }
+            guard let io = ioServiceFor(displayID: id) else { return false }
+            IOObjectRelease(io)
+            return true
+        })
     }
 
     @objc func currentScreenBrightness(with reply: @escaping (NSNumber?) -> Void) {
-        var b: Float = 0
-        if displayServicesGetBrightness(displayID: CGMainDisplayID(), out: &b) {
-            reply(NSNumber(value: b))
-            return
-        }
-        if let io = ioServiceFor(displayID: CGMainDisplayID()) {
-            var level: Float = 0
-            if IODisplayGetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, &level) == kIOReturnSuccess {
-                IOObjectRelease(io)
-                reply(NSNumber(value: level))
+        for id in brightnessCandidates() {
+            var b: Float = 0
+            if displayServicesGetBrightness(displayID: id, out: &b) {
+                reply(NSNumber(value: b))
                 return
             }
-            IOObjectRelease(io)
+            if let io = ioServiceFor(displayID: id) {
+                var level: Float = 0
+                let ok = IODisplayGetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, &level) == kIOReturnSuccess
+                IOObjectRelease(io)
+                if ok {
+                    reply(NSNumber(value: level))
+                    return
+                }
+            }
         }
         reply(nil)
     }
 
     @objc func setScreenBrightness(_ value: Float, with reply: @escaping (Bool) -> Void) {
         let clamped = max(0, min(1, value))
-        if displayServicesSetBrightness(displayID: CGMainDisplayID(), value: clamped) {
-            reply(true)
-            return
-        }
-        if let io = ioServiceFor(displayID: CGMainDisplayID()) {
-            let ok = IODisplaySetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, clamped) == kIOReturnSuccess
-            IOObjectRelease(io)
-            reply(ok)
-            return
+        for id in brightnessCandidates() {
+            if displayServicesSetBrightness(displayID: id, value: clamped) {
+                reply(true)
+                return
+            }
+            if let io = ioServiceFor(displayID: id) {
+                let ok = IODisplaySetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, clamped) == kIOReturnSuccess
+                IOObjectRelease(io)
+                if ok {
+                    reply(true)
+                    return
+                }
+            }
         }
         reply(false)
+    }
+
+    /// Displays worth trying, in order: the main one, then the built-in panel.
+    ///
+    /// Mirroring a MacBook onto a TV makes the TV `CGMainDisplayID()`, and neither
+    /// DisplayServices nor IOKit can set an HDMI TV's brightness — there is no DDC path
+    /// here. The panel that is actually lit is the built-in one and it still takes the
+    /// call, so the slider stops moving with nothing behind it.
+    private func brightnessCandidates() -> [CGDirectDisplayID] {
+        var ids: [CGDirectDisplayID] = [CGMainDisplayID()]
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return ids }
+        var online = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetOnlineDisplayList(count, &online, &count) == .success else { return ids }
+        for id in online.prefix(Int(count)) where CGDisplayIsBuiltin(id) != 0 && !ids.contains(id) {
+            ids.append(id)
+        }
+        return ids
     }
 
     // MARK: - Private helpers for DisplayServices / IOKit access
