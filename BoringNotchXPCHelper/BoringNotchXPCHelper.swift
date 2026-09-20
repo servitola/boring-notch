@@ -131,23 +131,76 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         reply(nil)
     }
 
+    /// One key press moves brightness by 1/16, and writing that in a single call is what
+    /// the eye reads as a jump. macOS ramps between steps instead; its own
+    /// `DisplayServicesSetBrightnessSmooth` is no help here — measured on macOS 26 it
+    /// returns success and leaves the panel untouched — so the ramp is ours.
+    ///
+    /// A held key repeats faster than one ramp lasts, so every new target supersedes the
+    /// ramp in flight through `rampGeneration`; the old one notices within a tick and
+    /// stops, and the new one starts from wherever the panel actually is. The reply goes
+    /// out on the first step, not at the end of the ramp, so the HUD is not held back.
+    private static let rampSteps = 8
+    private static let rampStepInterval: TimeInterval = 0.01
+
     @objc func setScreenBrightness(_ value: Float, with reply: @escaping (Bool) -> Void) {
-        let clamped = max(0, min(1, value))
-        for id in brightnessCandidates() {
-            if displayServicesSetBrightness(displayID: id, value: clamped) {
-                reply(true)
-                return
+        let target = max(0, min(1, value))
+        let displays = brightnessCandidates()
+
+        var from = target
+        var known = false
+        for id in displays {
+            var current: Float = 0
+            if displayServicesGetBrightness(displayID: id, out: &current) {
+                from = current
+                known = true
+                break
             }
+        }
+
+        rampLock.lock()
+        rampGeneration &+= 1
+        let generation = rampGeneration
+        rampLock.unlock()
+
+        let steps = Self.rampSteps
+        guard known, abs(target - from) > 0.002 else {
+            reply(applyBrightness(target, to: displays))
+            return
+        }
+
+        let stride = (target - from) / Float(steps)
+        let firstOK = applyBrightness(from + stride, to: displays)
+        reply(firstOK)
+        guard firstOK else { return }
+
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let self else { return }
+            for step in 2...steps {
+                Thread.sleep(forTimeInterval: Self.rampStepInterval)
+                self.rampLock.lock()
+                let live = self.rampGeneration
+                self.rampLock.unlock()
+                guard live == generation else { return }
+                _ = self.applyBrightness(from + stride * Float(step), to: displays)
+            }
+        }
+    }
+
+    private let rampLock = NSLock()
+    private var rampGeneration: UInt64 = 0
+
+    private func applyBrightness(_ value: Float, to displays: [CGDirectDisplayID]) -> Bool {
+        let clamped = max(0, min(1, value))
+        for id in displays {
+            if displayServicesSetBrightness(displayID: id, value: clamped) { return true }
             if let io = ioServiceFor(displayID: id) {
                 let ok = IODisplaySetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, clamped) == kIOReturnSuccess
                 IOObjectRelease(io)
-                if ok {
-                    reply(true)
-                    return
-                }
+                if ok { return true }
             }
         }
-        reply(false)
+        return false
     }
 
     /// The built-in panel, and nothing else while there is one.
