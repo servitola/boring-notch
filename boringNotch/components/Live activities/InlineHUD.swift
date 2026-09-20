@@ -16,49 +16,12 @@ struct InlineHUD: View {
     @Binding var hoverAnimation: Bool
     @Binding var gestureProgress: CGFloat
     var body: some View {
+        // No left half: the icon and the "Volume"/"Brightness" caption are gone, and an
+        // empty 100pt slot would still push the black bubble out to the left of the
+        // physical notch. ContentView shifts the whole notch right by half of what is
+        // left here — a centred HStack keeps the black rectangle over the real notch only
+        // while both halves are equal, and this one now has one.
         HStack {
-            HStack(spacing: 5) {
-                Group {
-                    switch (type) {
-                        case .volume:
-                            if icon.isEmpty {
-                                Image(systemName: SpeakerSymbol(value))
-                                    .contentTransition(.interpolate)
-                                    .symbolVariant(value > 0 ? .none : .slash)
-                                    .frame(width: 20, height: 15, alignment: .leading)
-                            } else {
-                                Image(systemName: icon)
-                                    .contentTransition(.interpolate)
-                                    .opacity(value.isZero ? 0.6 : 1)
-                                    .scaleEffect(value.isZero ? 0.85 : 1)
-                                    .frame(width: 20, height: 15, alignment: .leading)
-                            }
-                        case .brightness:
-                            Image(systemName: BrightnessSymbol(value))
-                                .contentTransition(.interpolate)
-                                .frame(width: 20, height: 15, alignment: .center)
-                        case .backlight:
-                            Image(systemName: value > 0.5 ? "light.max" : "light.min")
-                                .contentTransition(.interpolate)
-                                .frame(width: 20, height: 15, alignment: .center)
-                        case .mic:
-                            Image(systemName: "mic")
-                                .symbolRenderingMode(.hierarchical)
-                                .symbolVariant(value > 0 ? .none : .slash)
-                                .contentTransition(.interpolate)
-                                .frame(width: 20, height: 15, alignment: .center)
-                        default:
-                            EmptyView()
-                    }
-                }
-                .foregroundStyle(.white)
-                .symbolVariant(.fill)
-            }
-            // .center, not .leading: without the label the icon is the only thing in this
-            // 100pt slot, and at .leading it hangs off the far edge with 80pt of nothing
-            // between it and the notch, while the bar on the right fills its own slot.
-            .frame(width: 100 - (hoverAnimation ? 0 : 12) + gestureProgress / 2, height: vm.notchSize.height - (hoverAnimation ? 0 : 12), alignment: .center)
-            
             Rectangle()
                 .fill(.black)
                 .frame(width: vm.closedNotchSize.width - 20)
@@ -102,35 +65,14 @@ struct InlineHUD: View {
                 }
             }
             .padding(.trailing, 4)
-            .frame(width: 100 - (hoverAnimation ? 0 : 12) + gestureProgress / 2, height: vm.closedNotchSize.height - (hoverAnimation ? 0 : 12), alignment: .center)
+            .frame(width: Self.halfWidth(hoverAnimation: hoverAnimation, gestureProgress: gestureProgress), height: vm.closedNotchSize.height - (hoverAnimation ? 0 : 12), alignment: .center)
         }
         .frame(height: vm.closedNotchSize.height + (hoverAnimation ? 8 : 0), alignment: .center)
     }
     
-    func SpeakerSymbol(_ value: CGFloat) -> String {
-        switch(value) {
-            case 0:
-                return "speaker"
-            case 0...0.3:
-                return "speaker.wave.1"
-            case 0.3...0.8:
-                return "speaker.wave.2"
-            case 0.8...1:
-                return "speaker.wave.3"
-            default:
-                return "speaker.wave.2"
-        }
-    }
-    
-    func BrightnessSymbol(_ value: CGFloat) -> String {
-        switch(value) {
-            case 0...0.6:
-                return "sun.min"
-            case 0.6...1:
-                return "sun.max"
-            default:
-                return "sun.min"
-        }
+    /// Width of the HUD's only half. ContentView offsets the notch by half of it.
+    static func halfWidth(hoverAnimation: Bool, gestureProgress: CGFloat) -> CGFloat {
+        100 - (hoverAnimation ? 0 : 12) + gestureProgress / 2
     }
 }
 
