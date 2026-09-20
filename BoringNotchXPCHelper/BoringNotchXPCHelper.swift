@@ -150,22 +150,20 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         reply(false)
     }
 
-    /// Displays worth trying, in order: the main one, then the built-in panel.
+    /// The built-in panel, and nothing else while there is one.
     ///
-    /// Mirroring a MacBook onto a TV makes the TV `CGMainDisplayID()`, and neither
-    /// DisplayServices nor IOKit can set an HDMI TV's brightness — there is no DDC path
-    /// here. The panel that is actually lit is the built-in one and it still takes the
-    /// call, so the slider stops moving with nothing behind it.
+    /// Brightness here means the MacBook's own screen by definition. An external display
+    /// has no such knob over HDMI — no DDC path in this helper — and mirroring onto a TV
+    /// makes that TV `CGMainDisplayID()`, which is how asking the main display ended up
+    /// moving the HUD slider with nothing behind it. `CGMainDisplayID()` stays only as
+    /// the answer for a Mac that has no built-in panel at all.
     private func brightnessCandidates() -> [CGDirectDisplayID] {
-        var ids: [CGDirectDisplayID] = [CGMainDisplayID()]
         var count: UInt32 = 0
-        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return ids }
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return [CGMainDisplayID()] }
         var online = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetOnlineDisplayList(count, &online, &count) == .success else { return ids }
-        for id in online.prefix(Int(count)) where CGDisplayIsBuiltin(id) != 0 && !ids.contains(id) {
-            ids.append(id)
-        }
-        return ids
+        guard CGGetOnlineDisplayList(count, &online, &count) == .success else { return [CGMainDisplayID()] }
+        let builtin = online.prefix(Int(count)).filter { CGDisplayIsBuiltin($0) != 0 }
+        return builtin.isEmpty ? [CGMainDisplayID()] : Array(builtin)
     }
 
     // MARK: - Private helpers for DisplayServices / IOKit access
