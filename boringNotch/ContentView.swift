@@ -87,7 +87,13 @@ struct ContentView: View {
         guard vm.notchState == .closed, coordinator.sneakPeek.show, Defaults[.inlineHUD],
               coordinator.sneakPeek.type != .music, coordinator.sneakPeek.type != .battery
         else { return 0 }
-        return InlineHUD.halfWidth(hoverAnimation: isHovering, gestureProgress: gestureProgress) / 2
+        // The bubble is padding + (notch − 20) + HUD half + padding wide and centred, the
+        // physical notch is `notch` wide and centred, so the bubble's left edge sits
+        // padding + (half − 20) / 2 to the left of the notch's. Half of the HUD alone
+        // leaves the padding and the 20 the middle rectangle is short by — 4pt of black
+        // still poking out on the left.
+        let half = InlineHUD.halfWidth(hoverAnimation: isHovering, gestureProgress: gestureProgress)
+        return cornerRadiusInsets.closed.bottom + (half - 20) / 2
     }
 
     var body: some View {
