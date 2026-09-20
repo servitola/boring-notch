@@ -53,15 +53,11 @@ struct InlineHUD: View {
                 }
                 .foregroundStyle(.white)
                 .symbolVariant(.fill)
-                
-                Text(Type2Name(type))
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                    .allowsTightening(true)
-                    .contentTransition(.numericText())
             }
-            .frame(width: 100 - (hoverAnimation ? 0 : 12) + gestureProgress / 2, height: vm.notchSize.height - (hoverAnimation ? 0 : 12), alignment: .leading)
+            // .center, not .leading: without the label the icon is the only thing in this
+            // 100pt slot, and at .leading it hangs off the far edge with 80pt of nothing
+            // between it and the notch, while the bar on the right fills its own slot.
+            .frame(width: 100 - (hoverAnimation ? 0 : 12) + gestureProgress / 2, height: vm.notchSize.height - (hoverAnimation ? 0 : 12), alignment: .center)
             
             Rectangle()
                 .fill(.black)
@@ -134,21 +130,6 @@ struct InlineHUD: View {
                 return "sun.max"
             default:
                 return "sun.min"
-        }
-    }
-    
-    func Type2Name(_ type: SneakContentType) -> String {
-        switch(type) {
-            case .volume:
-                return "Volume"
-            case .brightness:
-                return "Brightness"
-            case .backlight:
-                return "Backlight"
-            case .mic:
-                return "Mic"
-            default:
-                return ""
         }
     }
 }
