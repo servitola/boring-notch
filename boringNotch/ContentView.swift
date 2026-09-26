@@ -80,6 +80,22 @@ struct ContentView: View {
         return chinWidth
     }
 
+    /// The inline HUD has no left half any more, so the centred layout would put the black
+    /// bubble half a HUD to the left of the physical notch. Shift the whole notch back by
+    /// that half; everything else keeps the symmetric layout and gets no offset.
+    private var inlineHUDOffset: CGFloat {
+        guard vm.notchState == .closed, coordinator.sneakPeek.show, Defaults[.inlineHUD],
+              coordinator.sneakPeek.type != .music, coordinator.sneakPeek.type != .battery
+        else { return 0 }
+        // The bubble is padding + (notch − 20) + HUD half + padding wide and centred, the
+        // physical notch is `notch` wide and centred, so the bubble's left edge sits
+        // padding + (half − 20) / 2 to the left of the notch's. Half of the HUD alone
+        // leaves the padding and the 20 the middle rectangle is short by — 4pt of black
+        // still poking out on the left.
+        let half = InlineHUD.halfWidth(hoverAnimation: isHovering, gestureProgress: gestureProgress)
+        return cornerRadiusInsets.closed.bottom + (half - 20) / 2
+    }
+
     var body: some View {
         // Calculate scale based on gesture progress only
         let gestureScale: CGFloat = {
@@ -119,6 +135,7 @@ struct ContentView: View {
                 
                 mainLayout
                     .frame(height: vm.notchState == .open ? vm.notchSize.height : nil)
+                    .offset(x: inlineHUDOffset)
                     .conditionalModifier(true) { view in
                         let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
                         let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
