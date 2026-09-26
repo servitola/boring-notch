@@ -101,6 +101,18 @@ final class MediaKeyInterceptor {
     // MARK: - Event Handling
     
     private func handleEvent(_ cgEvent: CGEvent) -> Unmanaged<CGEvent>? {
+        // macOS disables a tap whose callback was too slow, or that was interrupted by
+        // user input, and says so by delivering a synthetic event of that type. It is not
+        // a real event: NSEvent(cgEvent:) raises "unrecognized type is 4294967294" on it,
+        // and with the exception thrown the tap is never switched back on — media keys
+        // then fall through to the system HUD for the rest of the session. Re-enable and
+        // pass it on instead.
+        if cgEvent.type == .tapDisabledByTimeout || cgEvent.type == .tapDisabledByUserInput {
+            if let eventTap {
+                CGEvent.tapEnable(tap: eventTap, enable: true)
+            }
+            return Unmanaged.passRetained(cgEvent)
+        }
         // Ensure the CGEvent has a valid type before converting to NSEvent
         guard cgEvent.type != .null else {
             return Unmanaged.passRetained(cgEvent)

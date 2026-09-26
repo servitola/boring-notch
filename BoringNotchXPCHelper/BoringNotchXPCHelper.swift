@@ -102,41 +102,121 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
     // MARK: - Screen Brightness (moved from client app into helper)
 
     @objc func isScreenBrightnessAvailable(with reply: @escaping (Bool) -> Void) {
-        var b: Float = 0
-        reply(displayServicesGetBrightness(displayID: CGMainDisplayID(), out: &b) || ioServiceFor(displayID: CGMainDisplayID()) != nil)
+        reply(brightnessCandidates().contains { id in
+            var b: Float = 0
+            if displayServicesGetBrightness(displayID: id, out: &b) { return true }
+            guard let io = ioServiceFor(displayID: id) else { return false }
+            IOObjectRelease(io)
+            return true
+        })
     }
 
     @objc func currentScreenBrightness(with reply: @escaping (NSNumber?) -> Void) {
-        var b: Float = 0
-        if displayServicesGetBrightness(displayID: CGMainDisplayID(), out: &b) {
-            reply(NSNumber(value: b))
-            return
-        }
-        if let io = ioServiceFor(displayID: CGMainDisplayID()) {
-            var level: Float = 0
-            if IODisplayGetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, &level) == kIOReturnSuccess {
-                IOObjectRelease(io)
-                reply(NSNumber(value: level))
+        for id in brightnessCandidates() {
+            var b: Float = 0
+            if displayServicesGetBrightness(displayID: id, out: &b) {
+                reply(NSNumber(value: b))
                 return
             }
-            IOObjectRelease(io)
+            if let io = ioServiceFor(displayID: id) {
+                var level: Float = 0
+                let ok = IODisplayGetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, &level) == kIOReturnSuccess
+                IOObjectRelease(io)
+                if ok {
+                    reply(NSNumber(value: level))
+                    return
+                }
+            }
         }
         reply(nil)
     }
 
+    /// One key press moves brightness by 1/16, and writing that in a single call is what
+    /// the eye reads as a jump. macOS ramps between steps instead; its own
+    /// `DisplayServicesSetBrightnessSmooth` is no help here — measured on macOS 26 it
+    /// returns success and leaves the panel untouched — so the ramp is ours.
+    ///
+    /// A held key repeats faster than one ramp lasts, so every new target supersedes the
+    /// ramp in flight through `rampGeneration`; the old one notices within a tick and
+    /// stops, and the new one starts from wherever the panel actually is. The reply goes
+    /// out on the first step, not at the end of the ramp, so the HUD is not held back.
+    private static let rampSteps = 8
+    private static let rampStepInterval: TimeInterval = 0.01
+
     @objc func setScreenBrightness(_ value: Float, with reply: @escaping (Bool) -> Void) {
+        let target = max(0, min(1, value))
+        let displays = brightnessCandidates()
+
+        var from = target
+        var known = false
+        for id in displays {
+            var current: Float = 0
+            if displayServicesGetBrightness(displayID: id, out: &current) {
+                from = current
+                known = true
+                break
+            }
+        }
+
+        rampLock.lock()
+        rampGeneration &+= 1
+        let generation = rampGeneration
+        rampLock.unlock()
+
+        let steps = Self.rampSteps
+        guard known, abs(target - from) > 0.002 else {
+            reply(applyBrightness(target, to: displays))
+            return
+        }
+
+        let stride = (target - from) / Float(steps)
+        let firstOK = applyBrightness(from + stride, to: displays)
+        reply(firstOK)
+        guard firstOK else { return }
+
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let self else { return }
+            for step in 2...steps {
+                Thread.sleep(forTimeInterval: Self.rampStepInterval)
+                self.rampLock.lock()
+                let live = self.rampGeneration
+                self.rampLock.unlock()
+                guard live == generation else { return }
+                _ = self.applyBrightness(from + stride * Float(step), to: displays)
+            }
+        }
+    }
+
+    private let rampLock = NSLock()
+    private var rampGeneration: UInt64 = 0
+
+    private func applyBrightness(_ value: Float, to displays: [CGDirectDisplayID]) -> Bool {
         let clamped = max(0, min(1, value))
-        if displayServicesSetBrightness(displayID: CGMainDisplayID(), value: clamped) {
-            reply(true)
-            return
+        for id in displays {
+            if displayServicesSetBrightness(displayID: id, value: clamped) { return true }
+            if let io = ioServiceFor(displayID: id) {
+                let ok = IODisplaySetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, clamped) == kIOReturnSuccess
+                IOObjectRelease(io)
+                if ok { return true }
+            }
         }
-        if let io = ioServiceFor(displayID: CGMainDisplayID()) {
-            let ok = IODisplaySetFloatParameter(io, 0, kIODisplayBrightnessKey as CFString, clamped) == kIOReturnSuccess
-            IOObjectRelease(io)
-            reply(ok)
-            return
-        }
-        reply(false)
+        return false
+    }
+
+    /// The built-in panel, and nothing else while there is one.
+    ///
+    /// Brightness here means the MacBook's own screen by definition. An external display
+    /// has no such knob over HDMI — no DDC path in this helper — and mirroring onto a TV
+    /// makes that TV `CGMainDisplayID()`, which is how asking the main display ended up
+    /// moving the HUD slider with nothing behind it. `CGMainDisplayID()` stays only as
+    /// the answer for a Mac that has no built-in panel at all.
+    private func brightnessCandidates() -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return [CGMainDisplayID()] }
+        var online = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetOnlineDisplayList(count, &online, &count) == .success else { return [CGMainDisplayID()] }
+        let builtin = online.prefix(Int(count)).filter { CGDisplayIsBuiltin($0) != 0 }
+        return builtin.isEmpty ? [CGMainDisplayID()] : Array(builtin)
     }
 
     // MARK: - Private helpers for DisplayServices / IOKit access
